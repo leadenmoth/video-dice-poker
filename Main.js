@@ -299,6 +299,123 @@ const bindGroups = [
     })
 ];
 
+//#region Dice Pipeline
+const DICE_GRID_SIZE = 30;
+
+// Create a uniform buffer that describes the grid; similar to vertex buffer
+const diceUniformArray = new Float32Array([DICE_GRID_SIZE, DICE_GRID_SIZE]);
+const diceUniformBuffer = device.createBuffer({
+    label: "Dice grid uniforms",
+    size: diceUniformArray.byteLength,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+});
+device.queue.writeBuffer(diceUniformBuffer, 0, diceUniformArray);
+
+// Create an array representing the active state of each die.
+const diceStateArray = new Uint32Array(DICE_GRID_SIZE * DICE_GRID_SIZE);
+
+// Create two storage buffers to hold the dice state.
+const diceStateStorage =
+    device.createBuffer({
+        label: "Dice state",
+        size: diceStateArray.byteLength,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+
+// Randomly enable dice for testing
+for (let i = 0; i < diceStateArray.length; ++i) {
+    diceStateArray[i] = Math.random() < 0.6 ? 0 : 1;
+}
+device.queue.writeBuffer(diceStateStorage, 0, diceStateArray);
+
+const diceBindGroupLayout = device.createBindGroupLayout({
+    label: "Dice Bind Group Layout",
+    entries: [{
+        binding: 0,
+        visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
+        buffer: {} // Grid uniform buffer
+    }, {
+        binding: 1,
+        visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
+        buffer: { type: "read-only-storage" } // Dice state input buffer
+    }]
+});
+
+const diceBindGroup = 
+    device.createBindGroup({
+        label: "Dice renderer bind group",
+        layout: diceBindGroupLayout,
+        entries: [{
+            binding: 0,
+            resource: { buffer: diceUniformBuffer }
+        }, {
+            binding: 1,
+            resource: { buffer: diceStateStorage }
+        }],
+    });
+
+const dicePipelineLayout = device.createPipelineLayout({
+    label: "Dice Pipeline Layout",
+    bindGroupLayouts: [diceBindGroupLayout],
+});
+
+
+const diceShaderModule = device.createShaderModule({
+    label: "Dice shader",
+    code: `
+        struct VertexInput {
+            @location(0) pos: vec2f,
+            @builtin(instance_index) instance: u32,
+        };
+
+        struct VertexOutput {
+            @builtin(position) pos: vec4f,
+            @location(0) dice: vec2f,
+        };
+
+        @group(0) @binding(0) var<uniform> grid: vec2f;
+        @group(0) @binding(1) var<storage> diceState: array<u32>;
+
+        @vertex
+        fn vertexMain(input: VertexInput) -> VertexOutput {
+            let i = f32(input.instance); // Save the instance_index as a float
+            let dice = vec2f(i % grid.x, floor(i / grid.x)); // dice coordinates from bottom left
+            let state = f32(diceState[input.instance]);
+
+            let diceOffset = dice / grid * 2; //Canvas is actually 2x2, -1..+1
+            let gridPos = (input.pos * state + 1) / grid - 1 + diceOffset;
+
+            var output: VertexOutput;
+            output.pos = vec4f(gridPos, 0, 1);
+            output.dice = dice;
+            return output;
+        }
+        
+        @fragment
+        fn fragmentMain() -> @location(0) vec4f {
+            return vec4f(0, 0, 0.4, 1);
+        }
+    `
+});
+
+const dicePipeline = device.createRenderPipeline({
+    label: "Dice pipeline",
+    layout: dicePipelineLayout,
+    vertex: {
+        module: diceShaderModule,
+        entryPoint: "vertexMain",
+        buffers: [vertexBufferLayout]
+    },
+    fragment: {
+        module: diceShaderModule,
+        entryPoint: "fragmentMain",
+        targets: [{
+            format: canvasFormat
+        }]
+    }
+});
+//#endregion
+
 let step = 0; // Track how many simulation steps have been run
 function updateGrid() {
     device.queue.writeBuffer(controlStorage, 0, controlArray);
@@ -329,6 +446,10 @@ function updateGrid() {
     pass.setVertexBuffer(0, vertexBuffer);
     pass.setBindGroup(0, bindGroups[step % 2]);
     pass.draw(vertices.length / 2, GRID_SIZE * GRID_SIZE); // 6 vertices
+    pass.setPipeline(dicePipeline);
+    pass.setVertexBuffer(0, vertexBuffer);
+    pass.setBindGroup(0, diceBindGroup);
+    pass.draw(vertices.length / 2, DICE_GRID_SIZE * DICE_GRID_SIZE); // 6 vertices
     pass.end();
 
     //Creates buffer from finalized encoder
