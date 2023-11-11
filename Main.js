@@ -3,6 +3,20 @@ const GRID_SIZE_Y = 6;
 const UPDATE_INTERVAL = 10;
 const TIMEOUT_INTERVAL = 1000;
 const WORKGROUP_SIZE = 8;
+let balance = 100;
+
+const HandValues = {
+    0: "Nothing",
+    10: "Pair",
+    15: "Two pairs",
+    20: "Three of a kind",
+    30: "Five-high straight",
+    35: "Six-high straight",
+    40: "Full house",
+    50: "Four of a kind",
+    60: "Five of a kind",
+}
+
 const canvas = document.querySelector("canvas");
 
 //Check the browser supports WebGPU
@@ -72,16 +86,29 @@ const cellStateStorage = [
     device.createBuffer({
         label: "Cell State A",
         size: cellStateArray.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     }),
     device.createBuffer({
         label: "Cell State B",
         size: cellStateArray.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     })
 ];
 
+// An extra buffer to read out the cell state for game logic
+const cellStateReadStorage =
+    device.createBuffer({
+        label: "Cell State Read",
+        size: cellStateArray.byteLength,
+        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    });
 
+// Enable one random cell in each column, then copy the JavaScript array 
+// into the storage buffer.
+for (let i = 0; i < GRID_SIZE_X; ++i) {
+    cellStateArray[Math.floor(Math.random() * GRID_SIZE_Y) * GRID_SIZE_X + i] = 1;
+}
+device.queue.writeBuffer(cellStateStorage[0], 0, cellStateArray);
 
 
 //Buffer for game controls
@@ -162,7 +189,7 @@ const simulationShaderModule = device.createShaderModule({
             let isNext = cellActive(cell.x, cell.y+1);
             let i = cellIndex(cell.xy);
 
-            if control[cell.x+1] == 1 {
+            if (control[0] == 0) | (control[cell.x + 1] == 1) {
                 cellStateOut[i] = cellStateIn[i];
             } else {
                 switch isNext {
@@ -319,7 +346,7 @@ const diceStateArray = new Uint32Array([
 ]);
 console.log(diceStateArray.length);
 
-// Create storage buffer to hold the dice state.
+// Create two storage buffers to hold the dice state.
 const diceStateStorage =
     device.createBuffer({
         label: "Dice state",
@@ -458,27 +485,52 @@ function updateGrid() {
     pass.draw(vertices.length / 2, DICE_GRID_SIZE_X * DICE_GRID_SIZE_Y); // 6 vertices
     pass.end();
 
+    encoder.copyBufferToBuffer(cellStateStorage[step % 2], 0, cellStateReadStorage, 0, cellStateArray.byteLength);
     //Buffers are single-use, makes more sense to do in one-liner:
     device.queue.submit([encoder.finish()]);
 }
-// Schedule updateGrid() to run repeatedly
+
+//Preview frame
+updateGrid();
+
+//Process user input
 document.addEventListener('keydown', function (event) {
     switch (event.key) {
         case " ":
-            // Enable one random cell in each column, then copy the JavaScript array 
-            // into the storage buffer.
+            if (controlArray[0] == 0) {
+                balance -= 10;
+            }
+            document.getElementById("balance").textContent=balance;
+            
+            if (controlArray[0] % 2 == 1) break; //Ignore spacebar if already running
+
+            controlArray[0] += 1;
+
+            cellStateArray.fill(0);
             for (let i = 0; i < GRID_SIZE_X; ++i) {
                 cellStateArray[Math.floor(Math.random() * GRID_SIZE_Y) * GRID_SIZE_X + i] = 1;
             }
             device.queue.writeBuffer(cellStateStorage[0], 0, cellStateArray);
-            controlArray[0] = 1;
+
             // Schedule updateGrid() to run repeatedly
             const mainLoop = setInterval(updateGrid, UPDATE_INTERVAL)
             setTimeout(() => {
                 clearInterval(mainLoop);
-                controlArray[0] = 0;
-            }, TIMEOUT_INTERVAL)
+                getCellState().then(result => {
+                    controlArray[0] += 1;
+                    if (controlArray[0] >= 4) {
+                        balance += (evaluateHand(calculateHand(result)));
+                        document.getElementById("balance").textContent=balance;
+                        controlArray.fill(0);
+                    };
+
+                });
+                
+
+            }, TIMEOUT_INTERVAL);
+
             break;
+        //hold dice
         case "1":
         case "2":
         case "3":
@@ -491,3 +543,63 @@ document.addEventListener('keydown', function (event) {
     }
     console.log(controlArray);
 });
+
+
+async function getCellState() {
+    await cellStateReadStorage.mapAsync(
+        GPUMapMode.READ,
+        0,
+        cellStateArray.byteLength
+    );
+    const copyArrayBuffer = cellStateReadStorage.getMappedRange(0, cellStateArray.byteLength);
+    const data = copyArrayBuffer.slice();
+    cellStateReadStorage.unmap();
+    //console.log(new Uint32Array(data));
+    return data;
+}
+
+function calculateHand(cellStates) {
+    const cells = new Uint32Array(cellStates);
+    const hand = Array(5);
+    for (let i = 0; i < cells.length; i++) {
+        if (cells[i] == 1) {
+            hand[i % GRID_SIZE_X] = Math.floor(i / GRID_SIZE_X) + 1;
+            
+        };
+    };
+    return hand;
+}
+
+function evaluateHand(hand) {
+    const counts = Array(6).fill(0);
+    for (let i = 0; i < hand.length; i++) {
+        counts[hand[i] - 1]++;
+    }
+    console.log(counts);
+    if (counts.includes(5)) {
+        return 60;
+    }
+    if (counts.includes(4)) {
+        return 50;
+    }
+    if (counts.includes(3) && counts.includes(2)) {
+        return 40;
+    }
+    if ((counts.filter(x => x == 1).length == 5) && (counts[0] == 0)) {
+        return 35;
+    }
+    if ((counts.filter(x => x == 1).length == 5) && (counts[5] == 0)) {
+        return 30;
+    }
+    if (counts.includes(3)) {
+        return 20;
+    }
+    if (counts.filter(x => x == 2).length == 2) {
+        return 15;
+    }
+    if (counts.includes(2)) {
+        return 10;
+    }
+    return 0;
+}
+
