@@ -141,6 +141,7 @@ const cellShaderModule = device.createShaderModule({
 
         @group(0) @binding(0) var<uniform> grid: vec2f;
         @group(0) @binding(1) var<storage> cellState: array<u32>;
+        @group(0) @binding(3) var<storage> control: array<u32>;
 
         @vertex
         fn vertexMain(input: VertexInput) -> VertexOutput {
@@ -160,6 +161,9 @@ const cellShaderModule = device.createShaderModule({
         @fragment
         fn fragmentMain(input: VertexOutput) -> @location(0) vec4f {
             let c = input.cell / grid;
+            if (control[u32(input.cell.x) + 1] == 1) {
+                return vec4f(1, 1, 1, 1);
+            }
             return vec4f(c, 1 - c.x, 1);
         }
     `
@@ -560,6 +564,7 @@ document.addEventListener('keydown', function (event) {
             if (controlArray[0] == 2) //allow holding only after first roll
             {
                 controlArray[event.key] = (controlArray[event.key] + 1) % 2;
+                updateVisualsOnly();
             }
             break;
     }
@@ -622,3 +627,29 @@ function evaluateHand(hand) {
     return 0;
 }
 
+function updateVisualsOnly() {
+    device.queue.writeBuffer(controlStorage, 0, controlArray);
+    const encoder = device.createCommandEncoder();
+
+    const pass = encoder.beginRenderPass({
+        colorAttachments: [{
+            view: context.getCurrentTexture().createView(),
+            loadOp: "clear",
+            clearValue: { r: 0, g: 0, b: 0.4, a: 1 }, //changes frame color
+            storeOp: "store",
+        }]
+    });
+    pass.setPipeline(cellPipeline);
+    pass.setVertexBuffer(0, vertexBuffer);
+    pass.setBindGroup(0, bindGroups[step % 2]);
+    pass.draw(vertices.length / 2, GRID_SIZE_X * GRID_SIZE_Y); // 6 vertices
+    pass.setPipeline(dicePipeline);
+    pass.setVertexBuffer(0, vertexBuffer);
+    pass.setBindGroup(0, diceBindGroup);
+    pass.draw(vertices.length / 2, DICE_GRID_SIZE_X * DICE_GRID_SIZE_Y); // 6 vertices
+    pass.end();
+
+    encoder.copyBufferToBuffer(cellStateStorage[step % 2], 0, cellStateReadStorage, 0, cellStateArray.byteLength);
+    //Buffers are single-use, makes more sense to do in one-liner:
+    device.queue.submit([encoder.finish()]);
+}
