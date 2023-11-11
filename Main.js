@@ -189,7 +189,7 @@ const simulationShaderModule = device.createShaderModule({
             let isNext = cellActive(cell.x, cell.y+1);
             let i = cellIndex(cell.xy);
 
-            if (control[0] == 0) | (control[cell.x + 1] == 1) {
+            if (control[0] == 3) & (control[cell.x + 1] == 1) {
                 cellStateOut[i] = cellStateIn[i];
             } else {
                 switch isNext {
@@ -497,35 +497,43 @@ updateGrid();
 document.addEventListener('keydown', function (event) {
     switch (event.key) {
         case " ":
+            //bet 10 if we are in a new round
             if (controlArray[0] == 0) {
                 balance -= 10;
             }
-            document.getElementById("balance").textContent=balance;
-            
+            document.getElementById("balance").textContent = balance;
+
             if (controlArray[0] % 2 == 1) break; //Ignore spacebar if already running
 
-            controlArray[0] += 1;
-
-            cellStateArray.fill(0);
-            for (let i = 0; i < GRID_SIZE_X; ++i) {
-                cellStateArray[Math.floor(Math.random() * GRID_SIZE_Y) * GRID_SIZE_X + i] = 1;
-            }
-            device.queue.writeBuffer(cellStateStorage[0], 0, cellStateArray);
+            controlArray[0] += 1; //1 or 3 - running the first/second roll
+            document.getElementById("round").textContent = "Rolling... ";
 
             // Schedule updateGrid() to run repeatedly
             const mainLoop = setInterval(updateGrid, UPDATE_INTERVAL)
             setTimeout(() => {
                 clearInterval(mainLoop);
-                getCellState().then(result => {
-                    controlArray[0] += 1;
-                    if (controlArray[0] >= 4) {
-                        balance += (evaluateHand(calculateHand(result)));
-                        document.getElementById("balance").textContent=balance;
-                        controlArray.fill(0);
-                    };
+                controlArray[0] += 1; //2 or 4 - finished 1st/2nd roll
 
-                });
-                
+                if (controlArray[0] == 2) {
+                    document.getElementById("round").textContent = "First roll - choose your holds!";
+                }
+                else if (controlArray[0] >= 4) {
+                    getCellState().then(result => {
+                        let winnings = evaluateHand(calculateHand(result));
+                        balance += winnings;
+                        document.getElementById("balance").textContent = balance;
+                        document.getElementById("round").textContent = HandValues[winnings] + "! ";
+                        controlArray.fill(0);
+                        cellStateArray.fill(0);
+                        for (let i = 0; i < GRID_SIZE_X; ++i) {
+                            cellStateArray[Math.floor(Math.random() * GRID_SIZE_Y) * GRID_SIZE_X + i] = 1;
+                        }
+                        device.queue.writeBuffer(cellStateStorage[0], 0, cellStateArray);
+                        device.queue.writeBuffer(cellStateStorage[1], 0, cellStateArray);
+                    });
+
+                };
+
 
             }, TIMEOUT_INTERVAL);
 
@@ -536,7 +544,8 @@ document.addEventListener('keydown', function (event) {
         case "3":
         case "4":
         case "5":
-            if (controlArray[0] == 0) {
+            if (controlArray[0] == 2) //allow holding only after first roll
+            {
                 controlArray[event.key] = (controlArray[event.key] + 1) % 2;
             }
             break;
@@ -564,7 +573,7 @@ function calculateHand(cellStates) {
     for (let i = 0; i < cells.length; i++) {
         if (cells[i] == 1) {
             hand[i % GRID_SIZE_X] = Math.floor(i / GRID_SIZE_X) + 1;
-            
+
         };
     };
     return hand;
