@@ -1,5 +1,7 @@
-const GRID_SIZE = 6;
-const UPDATE_INTERVAL = 50; // Update every 200ms (5 times/sec)
+const GRID_SIZE_X = 5;
+const GRID_SIZE_Y = 6;
+const UPDATE_INTERVAL = 10;
+const TIMEOUT_INTERVAL = 1000;
 const WORKGROUP_SIZE = 8;
 const canvas = document.querySelector("canvas");
 
@@ -23,15 +25,6 @@ context.configure({
     format: canvasFormat,
 });
 
-//TODO: function to split a square into 2 triangles
-//or look into Index Buffers
-// const vertices = new Float32Array([
-//     //X,  Y,
-//     -0.8, -0.8,
-//     0.8, -0.8,
-//     0.8, 0.8,
-//     -0.8, 0.8,
-// ]);
 const vertices = new Float32Array([
     //   X,    Y,
     -0.8, -0.8, // Triangle 1 (Blue)
@@ -63,7 +56,7 @@ const vertexBufferLayout = {
 };
 
 // Create a uniform buffer that describes the grid; similar to vertex buffer
-const uniformArray = new Float32Array([GRID_SIZE, GRID_SIZE]);
+const uniformArray = new Float32Array([GRID_SIZE_X, GRID_SIZE_Y]);
 const uniformBuffer = device.createBuffer({
     label: "Grid Uniforms",
     size: uniformArray.byteLength,
@@ -72,7 +65,7 @@ const uniformBuffer = device.createBuffer({
 device.queue.writeBuffer(uniformBuffer, 0, uniformArray);
 
 // Create an array representing the active state of each cell.
-const cellStateArray = new Uint32Array(GRID_SIZE * GRID_SIZE);
+const cellStateArray = new Uint32Array(GRID_SIZE_X * GRID_SIZE_Y);
 
 // Create two storage buffers to hold the cell state.
 const cellStateStorage = [
@@ -88,37 +81,16 @@ const cellStateStorage = [
     })
 ];
 
-// Enable one random cell in each column, then copy the JavaScript array 
-// into the storage buffer.
-for (let i = 0; i < GRID_SIZE; ++i) {
-    cellStateArray[Math.floor(Math.random() * GRID_SIZE) * GRID_SIZE + i] = 1;
-}
-device.queue.writeBuffer(cellStateStorage[0], 0, cellStateArray);
+
 
 
 //Buffer for game controls
-const controlArray = new Uint32Array(6);
+const controlArray = new Uint32Array([0, 0, 0, 0, 0, 0]);
 
 const controlStorage = device.createBuffer({
     label: "Control Buffer",
     size: controlArray.byteLength,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-});
-
-controlArray[0] = 1;
-document.addEventListener('keydown', function (event) {
-    switch(event.key) {
-        case " ":
-            controlArray[0] = (controlArray[0] + 1) % 2;
-            break;
-        case "1":
-        case "2":
-        case "3":
-        case "4":
-        case "5":
-            controlArray[event.key] = (controlArray[event.key] + 1) % 2;
-            break;
-    }
 });
 
 //Shaders are GPU code that defines how to process vertices
@@ -167,7 +139,7 @@ const cellShaderModule = device.createShaderModule({
 
 // Create the compute shader that will process the simulation.
 const simulationShaderModule = device.createShaderModule({
-    label: "Game of Life simulation shader",
+    label: "Logic shader",
     code: `
         @group(0) @binding(0) var<uniform> grid: vec2f;
 
@@ -190,7 +162,9 @@ const simulationShaderModule = device.createShaderModule({
             let isNext = cellActive(cell.x, cell.y+1);
             let i = cellIndex(cell.xy);
 
-            if control[0] == 1 {
+            if control[cell.x+1] == 1 {
+                cellStateOut[i] = cellStateIn[i];
+            } else {
                 switch isNext {
                     case 1: { // Cell with neighbor above becomes active.
                         cellStateOut[i] = 1;
@@ -199,8 +173,6 @@ const simulationShaderModule = device.createShaderModule({
                         cellStateOut[i] = 0;
                     }
                 }
-            } else {
-                cellStateOut[i] = cellStateIn[i];
             }
 
         }`
@@ -300,10 +272,11 @@ const bindGroups = [
 ];
 
 //#region Dice Pipeline
-const DICE_GRID_SIZE = 30;
+const DICE_GRID_SIZE_X = 25;
+const DICE_GRID_SIZE_Y = 30;
 
 // Create a uniform buffer that describes the grid; similar to vertex buffer
-const diceUniformArray = new Float32Array([DICE_GRID_SIZE, DICE_GRID_SIZE]);
+const diceUniformArray = new Float32Array([DICE_GRID_SIZE_X, DICE_GRID_SIZE_Y]);
 const diceUniformBuffer = device.createBuffer({
     label: "Dice grid uniforms",
     size: diceUniformArray.byteLength,
@@ -312,9 +285,41 @@ const diceUniformBuffer = device.createBuffer({
 device.queue.writeBuffer(diceUniformBuffer, 0, diceUniformArray);
 
 // Create an array representing the active state of each die.
-const diceStateArray = new Uint32Array(DICE_GRID_SIZE * DICE_GRID_SIZE);
+const diceStateArray = new Uint32Array([
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0,
+    0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0,
+    0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0,
+    0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0,
+    0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0,
+    0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0,
+    0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+]);
+console.log(diceStateArray.length);
 
-// Create two storage buffers to hold the dice state.
+// Create storage buffer to hold the dice state.
 const diceStateStorage =
     device.createBuffer({
         label: "Dice state",
@@ -323,9 +328,9 @@ const diceStateStorage =
     });
 
 // Randomly enable dice for testing
-for (let i = 0; i < diceStateArray.length; ++i) {
-    diceStateArray[i] = Math.random() < 0.6 ? 0 : 1;
-}
+// for (let i = 0; i < diceStateArray.length; ++i) {
+//     diceStateArray[i] = Math.random() < 0.6 ? 0 : 1;
+// }
 device.queue.writeBuffer(diceStateStorage, 0, diceStateArray);
 
 const diceBindGroupLayout = device.createBindGroupLayout({
@@ -341,7 +346,7 @@ const diceBindGroupLayout = device.createBindGroupLayout({
     }]
 });
 
-const diceBindGroup = 
+const diceBindGroup =
     device.createBindGroup({
         label: "Dice renderer bind group",
         layout: diceBindGroupLayout,
@@ -417,6 +422,7 @@ const dicePipeline = device.createRenderPipeline({
 //#endregion
 
 let step = 0; // Track how many simulation steps have been run
+let countdown = 200;
 function updateGrid() {
     device.queue.writeBuffer(controlStorage, 0, controlArray);
     const encoder = device.createCommandEncoder();
@@ -424,7 +430,7 @@ function updateGrid() {
     const computePass = encoder.beginComputePass();
     computePass.setPipeline(simulationPipeline);
     computePass.setBindGroup(0, bindGroups[step % 2]);
-    const workgroupCount = Math.ceil(GRID_SIZE / WORKGROUP_SIZE);
+    const workgroupCount = Math.ceil(GRID_SIZE_X * GRID_SIZE_Y / WORKGROUP_SIZE ** 2);
     computePass.dispatchWorkgroups(workgroupCount, workgroupCount);
     computePass.end();
 
@@ -445,21 +451,43 @@ function updateGrid() {
     pass.setPipeline(cellPipeline);
     pass.setVertexBuffer(0, vertexBuffer);
     pass.setBindGroup(0, bindGroups[step % 2]);
-    pass.draw(vertices.length / 2, GRID_SIZE * GRID_SIZE); // 6 vertices
+    pass.draw(vertices.length / 2, GRID_SIZE_X * GRID_SIZE_Y); // 6 vertices
     pass.setPipeline(dicePipeline);
     pass.setVertexBuffer(0, vertexBuffer);
     pass.setBindGroup(0, diceBindGroup);
-    pass.draw(vertices.length / 2, DICE_GRID_SIZE * DICE_GRID_SIZE); // 6 vertices
+    pass.draw(vertices.length / 2, DICE_GRID_SIZE_X * DICE_GRID_SIZE_Y); // 6 vertices
     pass.end();
-
-    //Creates buffer from finalized encoder
-    //const commandBuffer = encoder.finish();
-
-    //Sends an array of command buffers to the GPU for exectution
-    //device.queue.submit([commandBuffer]);
 
     //Buffers are single-use, makes more sense to do in one-liner:
     device.queue.submit([encoder.finish()]);
 }
 // Schedule updateGrid() to run repeatedly
-setInterval(updateGrid, UPDATE_INTERVAL);
+document.addEventListener('keydown', function (event) {
+    switch (event.key) {
+        case " ":
+            // Enable one random cell in each column, then copy the JavaScript array 
+            // into the storage buffer.
+            for (let i = 0; i < GRID_SIZE_X; ++i) {
+                cellStateArray[Math.floor(Math.random() * GRID_SIZE_Y) * GRID_SIZE_X + i] = 1;
+            }
+            device.queue.writeBuffer(cellStateStorage[0], 0, cellStateArray);
+            controlArray[0] = 1;
+            // Schedule updateGrid() to run repeatedly
+            const mainLoop = setInterval(updateGrid, UPDATE_INTERVAL)
+            setTimeout(() => {
+                clearInterval(mainLoop);
+                controlArray[0] = 0;
+            }, TIMEOUT_INTERVAL)
+            break;
+        case "1":
+        case "2":
+        case "3":
+        case "4":
+        case "5":
+            if (controlArray[0] == 0) {
+                controlArray[event.key] = (controlArray[event.key] + 1) % 2;
+            }
+            break;
+    }
+    console.log(controlArray);
+});
