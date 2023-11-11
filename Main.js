@@ -2,7 +2,8 @@ const GRID_SIZE_X = 5;
 const GRID_SIZE_Y = 6;
 const UPDATE_INTERVAL = 10;
 const TIMEOUT_INTERVAL = 1000;
-const WORKGROUP_SIZE = 8;
+const WORKGROUP_SIZE_X = 5;
+const WORKGROUP_SIZE_Y = 6;
 let balance = 100;
 
 const HandValues = {
@@ -179,14 +180,18 @@ const simulationShaderModule = device.createShaderModule({
                     (cell.x % u32(grid.x));
         }
 
+        fn cellPos(cellInd: u32) -> vec2u {
+            return vec2u(cellInd % u32(grid.x), cellInd / u32(grid.x));
+        }
+
         fn cellActive(x: u32, y: u32) -> u32 {
             return cellStateIn[cellIndex(vec2(x, y))];
         }
 
-        @compute @workgroup_size(${WORKGROUP_SIZE}, ${WORKGROUP_SIZE})
+        @compute @workgroup_size(${WORKGROUP_SIZE_X}, ${WORKGROUP_SIZE_Y})
         fn computeMain(@builtin(global_invocation_id) cell: vec3u) {
             // Check if cell above was active
-            let isNext = cellActive(cell.x, cell.y+1);
+            let isNext = cellActive(cell.x, (cell.y + 1 + control[cell.x + 1]) % u32(grid.y));
             let i = cellIndex(cell.xy);
 
             if (control[0] == 3) & (control[cell.x + 1] == 1) {
@@ -344,7 +349,6 @@ const diceStateArray = new Uint32Array([
     0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 ]);
-console.log(diceStateArray.length);
 
 // Create two storage buffers to hold the dice state.
 const diceStateStorage =
@@ -457,7 +461,7 @@ function updateGrid() {
     const computePass = encoder.beginComputePass();
     computePass.setPipeline(simulationPipeline);
     computePass.setBindGroup(0, bindGroups[step % 2]);
-    const workgroupCount = Math.ceil(GRID_SIZE_X * GRID_SIZE_Y / WORKGROUP_SIZE ** 2);
+    const workgroupCount = Math.ceil(GRID_SIZE_X * GRID_SIZE_Y / (WORKGROUP_SIZE_X * WORKGROUP_SIZE_Y));
     computePass.dispatchWorkgroups(workgroupCount, workgroupCount);
     computePass.end();
 
@@ -508,6 +512,15 @@ document.addEventListener('keydown', function (event) {
             controlArray[0] += 1; //1 or 3 - running the first/second roll
             document.getElementById("round").textContent = "Rolling... ";
 
+            //ugly workaround to feed some randomness into second roll
+            if (controlArray[0] == 3) {
+                for (let i = 1; i < controlArray.length; ++i) {
+                    if (controlArray[i] == 0) {
+                        controlArray[i] = Math.floor(Math.random() * 3) + 2; 
+                    }
+                }
+            }
+            console.log(controlArray);
             // Schedule updateGrid() to run repeatedly
             const mainLoop = setInterval(updateGrid, UPDATE_INTERVAL)
             setTimeout(() => {
@@ -550,7 +563,6 @@ document.addEventListener('keydown', function (event) {
             }
             break;
     }
-    console.log(controlArray);
 });
 
 
@@ -563,7 +575,6 @@ async function getCellState() {
     const copyArrayBuffer = cellStateReadStorage.getMappedRange(0, cellStateArray.byteLength);
     const data = copyArrayBuffer.slice();
     cellStateReadStorage.unmap();
-    //console.log(new Uint32Array(data));
     return data;
 }
 
@@ -584,7 +595,6 @@ function evaluateHand(hand) {
     for (let i = 0; i < hand.length; i++) {
         counts[hand[i] - 1]++;
     }
-    console.log(counts);
     if (counts.includes(5)) {
         return 60;
     }
